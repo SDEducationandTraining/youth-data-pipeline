@@ -2,11 +2,18 @@
 
 Cleans, standardizes, validates, combines, and deduplicates Youth Program source datasets into a single master CSV file.
 
+## User Guide
+
+For step-by-step instructions on how to run this pipeline, see the user guide:
+
+[Youth Data Pipeline User Guide](https://docs.google.com/document/d/1RNqfM8Lbh2fI0FLMrmlbzGVyQvp87M9TpoLkBGTPo-s/edit?usp=sharing)
+
 ## Overview
 
 This project converts multiple Youth Program source files into one standardized master dataset for analysis and reporting.
 
 The script reads all supported files from a raw input folder, applies a 27-column schema, validates the cleaned data with Pandera, combines all sources, merges duplicates, and exports both a final CSV and an Excel quality report.
+
 
 ## Project Structure
 
