@@ -1,0 +1,25 @@
+# Virtual environment
+.venv/
+
+# Data
+data/raw/*
+data/processed/*
+
+# Keep folder structure
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# Mac system files
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+
+# Python build/package files
+*.egg-info/
+dist/
+build/
+
+# Jupyter
+.ipynb_checkpoints/
