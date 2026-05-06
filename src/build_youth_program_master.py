@@ -185,8 +185,6 @@ NUMERIC_COLUMNS = [
     "Household Size",
 ]
 
-SUPPORTED_EXTENSIONS = {".csv", ".xlsx", ".xls"}
-
 UNIVERSAL_COLUMN_MAPPING = {
     # Site and identifiers
     "Site": "Site",
@@ -256,6 +254,10 @@ NORMALIZED_COLUMN_MAPPING = {
     source_column.strip().casefold(): target_column
     for source_column, target_column in UNIVERSAL_COLUMN_MAPPING.items()
 }
+
+SUPPORTED_EXTENSIONS = {".csv", ".xlsx", ".xls"}
+
+DUPLICATE_KEY_COLUMNS = ["Full Name", "DOB"]
 
 
 def build_master_schema() -> DataFrameSchema | None:
@@ -523,6 +525,75 @@ def build_duplicate_summary(df: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def build_duplicate_records(df: pd.DataFrame) -> pd.DataFrame:
+    """Return records that appear duplicated by Full Name + DOB."""
+    duplicate_mask = df.duplicated(subset=DUPLICATE_KEY_COLUMNS, keep=False)
+
+    return (
+        df.loc[duplicate_mask]
+        .sort_values(by=DUPLICATE_KEY_COLUMNS)
+        .reset_index(drop=True)
+    )
+
+
+def first_non_missing(series: pd.Series):
+    """Return the first non-missing value in a series."""
+    non_missing = series.dropna()
+
+    if non_missing.empty:
+        return pd.NA
+
+    return non_missing.iloc[0]
+
+
+def merge_duplicate_records(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Merge duplicate records by Full Name + DOB.
+
+    Rows are only merged when both Full Name and DOB are present.
+    Rows with missing DOB are kept as-is to avoid accidentally merging
+    different people with the same name.
+    """
+    df = df.copy()
+
+    mergeable_df = df.dropna(subset=DUPLICATE_KEY_COLUMNS).copy()
+    non_mergeable_df = df[df[DUPLICATE_KEY_COLUMNS].isna().any(axis=1)].copy()
+
+    mergeable_df["_non_missing_count"] = mergeable_df.notna().sum(axis=1)
+
+    mergeable_df = mergeable_df.sort_values(
+        by=DUPLICATE_KEY_COLUMNS + ["_non_missing_count"],
+        ascending=[True, True, False],
+    )
+
+    merged_df = (
+        mergeable_df.groupby(DUPLICATE_KEY_COLUMNS, as_index=False)
+        .agg(first_non_missing)
+        .drop(columns="_non_missing_count")
+    )
+
+    final_df = pd.concat([merged_df, non_mergeable_df], ignore_index=True)
+
+    return final_df[MASTER_COLUMNS]
+
+
+def build_deduplication_summary(
+    pre_merge_df: pd.DataFrame,
+    post_merge_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """Return row counts before and after duplicate merging."""
+    return pd.DataFrame(
+        [
+            {"check": "Rows before duplicate merge", "count": len(pre_merge_df)},
+            {"check": "Rows after duplicate merge", "count": len(post_merge_df)},
+            {
+                "check": "Rows removed through duplicate merge",
+                "count": len(pre_merge_df) - len(post_merge_df),
+            },
+        ]
+    )
+
+
 def build_unique_summary(df: pd.DataFrame) -> pd.DataFrame:
     """Return unique value counts by column."""
     return (
@@ -539,25 +610,35 @@ def build_source_summary(source_rows: list[dict[str, object]]) -> pd.DataFrame:
 
 
 def write_quality_report(
-    df: pd.DataFrame,
+    final_df: pd.DataFrame,
+    pre_merge_df: pd.DataFrame,
     output_path: Path,
     source_rows: list[dict[str, object]],
 ) -> None:
     """Write a lightweight Excel quality report for the final master dataframe."""
+    duplicate_records = build_duplicate_records(pre_merge_df)
+
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         build_source_summary(source_rows).to_excel(
             writer, sheet_name="source_summary", index=False
         )
-        build_missing_summary(df).to_excel(
+        build_deduplication_summary(pre_merge_df, final_df).to_excel(
+            writer, sheet_name="deduplication_summary", index=False
+        )
+        build_duplicate_summary(pre_merge_df).to_excel(
+            writer, sheet_name="duplicates_pre_merge", index=False
+        )
+        duplicate_records.to_excel(writer, sheet_name="duplicate_records", index=False)
+        build_duplicate_summary(final_df).to_excel(
+            writer, sheet_name="duplicates_final", index=False
+        )
+        build_missing_summary(final_df).to_excel(
             writer, sheet_name="missing_summary", index=False
         )
-        build_duplicate_summary(df).to_excel(
-            writer, sheet_name="duplicate_summary", index=False
-        )
-        build_future_date_summary(df).to_excel(
+        build_future_date_summary(final_df).to_excel(
             writer, sheet_name="future_dates", index=False
         )
-        build_unique_summary(df).to_excel(
+        build_unique_summary(final_df).to_excel(
             writer, sheet_name="unique_counts", index=False
         )
 
@@ -567,7 +648,7 @@ def write_quality_report(
             "Nationality",
             "Highest Education Completed",
         ]:
-            value_counts = df[column].value_counts(dropna=False).reset_index()
+            value_counts = final_df[column].value_counts(dropna=False).reset_index()
             value_counts.columns = [column, "count"]
             sheet_name = column[:31]
             value_counts.to_excel(writer, sheet_name=sheet_name, index=False)
@@ -575,6 +656,7 @@ def write_quality_report(
 
 def save_outputs(
     df: pd.DataFrame,
+    pre_merge_df: pd.DataFrame,
     output_dir: Path,
     output_prefix: str,
     source_rows: list[dict[str, object]],
@@ -587,7 +669,12 @@ def save_outputs(
 
     df.to_csv(csv_path, index=False)
 
-    write_quality_report(df, report_path, source_rows)
+    write_quality_report(
+        final_df=df,
+        pre_merge_df=pre_merge_df,
+        output_path=report_path,
+        source_rows=source_rows,
+    )
 
     return {
         "csv": csv_path,
@@ -658,11 +745,18 @@ def main() -> None:
 
         cleaned_sources.append(cleaned_df)
 
-    master_df = combine_sources(cleaned_sources)
-    master_df = validate_dataframe(master_df, schema, "final master dataframe")
+    pre_merge_master_df = combine_sources(cleaned_sources)
+    pre_merge_master_df = validate_dataframe(
+        pre_merge_master_df, schema, "pre-merge master dataframe"
+    )
+
+    master_df = merge_duplicate_records(pre_merge_master_df)
+    master_df = convert_column_types(master_df)
+    master_df = validate_dataframe(master_df, schema, "final merged master dataframe")
 
     outputs = save_outputs(
         df=master_df,
+        pre_merge_df=pre_merge_master_df,
         output_dir=args.output_dir,
         output_prefix=args.output_prefix,
         source_rows=source_rows,
@@ -676,7 +770,11 @@ def main() -> None:
         "Duplicate Full Name + DOB records: "
         f"{int(master_df.duplicated(subset=['Full Name', 'DOB']).sum())}"
     )
-
+    print(f"Rows before duplicate merge: {len(pre_merge_master_df)}")
+    print(f"Rows after duplicate merge: {len(master_df)}")
+    print(
+        f"Rows removed through duplicate merge: {len(pre_merge_master_df) - len(master_df)}"
+    )
     print("\nSaved files:")
     for label, path in outputs.items():
         print(f"- {label}: {path}")
