@@ -8,13 +8,12 @@ Description: Cleans, standardizes, validates, combines, and exports any number o
     that follows a shared 27-column schema.
 Author name(s): Aria Shahpari
 Creation date: 2026-05-04
-Last modified date: 2026-05-04
-Version number: 2.0.0
+Last modified date: 2026-05-06
 
 Usage
 -----
 How to run the script:
-    python build_youth_program_master.py --source-dir PATH_TO_RAW_FOLDER --output-dir PATH_TO_OUTPUT_FOLDER
+    python src/build_youth_program_master.py --source-dir data/raw --output-dir data/processed --output-prefix youth_program_master
 
 Required arguments/parameters:
     --source-dir
@@ -28,7 +27,7 @@ Optional flags and defaults:
 
     --output-prefix
         File name prefix for output files, without extension.
-        Default: youth_program_master_q1_q2_2026
+        Default: youth_program_master
 
     --file-pattern
         Glob pattern used to select files from --source-dir.
@@ -72,8 +71,7 @@ Why this script exists / what problem it solves:
     The Youth Program source datasets come from separate spreadsheets with overlapping
     but inconsistent structures. This script lets the user place all raw source files
     into one folder, then automatically loads, cleans, standardizes, validates, combines,
-    and exports them as one schema-aligned master dataset for reporting, analysis,
-    dashboarding, or later automation work.
+    and exports them as one schema-aligned master dataset for analysis and reporting.
 
 Assumptions:
     - Source files are stored in one raw folder provided through --source-dir.
@@ -91,7 +89,8 @@ Assumptions:
     - Missing master columns should be added as empty columns during alignment.
 
 Known limitations / edge cases:
-    - This script does not deduplicate records; it reports duplicate counts only.
+    - This script merges duplicate records based on Full Name and DOB. Records missing either field are not merged to avoid incorrectly combining different individuals.
+    - Duplicate detection assumes that Full Name + DOB uniquely identifies an individual. If this assumption does not hold, incorrect merges may occur.
     - This script does not correct inconsistent category spellings such as gender,
       nationality, language, or education values.
     - Date parsing uses pandas format="mixed" with errors="coerce", so invalid dates
